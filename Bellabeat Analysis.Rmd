@@ -1,0 +1,399 @@
+---
+title: "Bellabeat Analysis"
+author: "James Charest"
+date: "2022-12-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## The task
+
+Bellabeat has hired our team to analyze a dataset of Fitbit fitness tracker data from 33 women, in order to glean a greater understanding of how they use fitness tracking device.  
+
+## Packages we used
+
+In order to accomplish this task, there were a variety of packages we needed to install and load.  
+
+```{r message=FALSE, warning=FALSE}
+install.packages("tidyverse")
+install.packages("lubridate")
+install.packages("dplyr")
+install.packages("janitor")
+install.packages("ggplot2")
+install.packages("ggpubr")
+install.packages("reshape2")
+install.packages("patchwork")
+install.packages("scales")
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(janitor)
+library(ggplot2)
+library(ggpubr)
+library(reshape2)
+library(patchwork)
+library(scales)
+```
+
+## Uploading our data
+
+While there were 18 total CSV files, we only looked at four of them, because they most fit our analytical needs: 
+
+```{r warning=FALSE}
+dailyactivity <- read_csv("dailyActivity_merged.csv")
+hourlyintensities <- read_csv("hourlyIntensities_merged.csv")
+hourlysteps <- read_csv("hourlySteps_merged.csv")
+sleepday <- read_csv("sleepDay_merged.csv")
+```
+
+## Examining Daily Activity by Weekday
+
+### Cleaning the data
+```{r warning=FALSE}
+#Check for duplicates
+sum(duplicated(dailyactivity))
+#Change the format of activity date
+dailyactivity$ActivityDate <- as.POSIXct(dailyactivity$ActivityDate, format="%m/%d/%Y") 
+#Add a column for a day of the week
+dailyactivity$weekday <- wday(dailyactivity$ActivityDate, label=TRUE)
+#Add a column that shows weekday or weekend
+dailyactivity <- dailyactivity %>% 
+  mutate(Weekend = case_when(
+    weekday == "Sun" ~ 'Weekend' 
+    , weekday == "Sat" ~ 'Weekend'
+    , TRUE ~ 'Weekday'
+  ))
+#Change the name of a column, so labels are consistent
+dailyactivity <- dailyactivity %>% 
+  rename(FairlyActiveDistance = ModeratelyActiveDistance)
+```
+
+
+### Is usage consistent across the week?
+
+Use a bar chart to examine this first. 
+```{r warning=FALSE}
+ggplot(dailyactivity, aes(x=weekday, fill=..count..))+
+  geom_bar(stat="count")+
+  scale_fill_gradient(low="red", high="blue")+
+  theme(legend.position = "none")+
+  labs(title = "Records per day")
+```
+
+Quickly check to see if this was consistent by each person using a facet wrap of IDs. 
+```{r warning=FALSE}
+ggplot(dailyactivity, aes(x=weekday, fill=..count..))+
+  geom_bar(stat="count")+
+  scale_fill_gradient(low="red", high="blue")+
+  theme(legend.position = "none")+
+  labs(title = "Records per day")+
+  facet_wrap(~Id)+
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+After examining both charts, there generally seems to be a pattern of greater usage/records in the middle of the week. 
+
+### Examining the activity level by day
+
+In order to see if the fitbits were only worn during periods of Very or Fairly Active activities, we examined the breakdown of minute types per day. Ultimately, the goal is to see if there is a major discrepancy between types of minutes by day.
+
+To start, we did some data manipulation to get a dataframe in the format we could work with. 
+
+```{r warning=FALSE}
+dailyminutetype <- select(dailyactivity, c("weekday", "VeryActiveMinutes", 
+                   "FairlyActiveMinutes", "LightlyActiveMinutes",
+                   "SedentaryMinutes"))
+
+agg=aggregate(dailyminutetype,
+              by = list(dailyminutetype$weekday),
+              FUN = mean)
+
+aggminutebyday <- select(agg, -c("weekday")) %>% 
+  rename(Weekday = Group.1)
+
+MinutetypeAll <- melt(aggminutebyday,  id.vars = 'Weekday', variable.name = 'minutetype')
+```
+
+Then, we visualized it with a grouped bar chart: 
+
+```{r warning=FALSE}
+ggplot(MinutetypeAll, aes(fill=minutetype, y=value, x=Weekday)) + 
+  geom_bar(position="dodge", stat="identity")
+```
+
+Since the sedentary minutes skews the chart a bit, we removed that column to better examine active minutes. 
+
+```{r warning=FALSE}
+aggminutebydayNS <- select(aggminutebyday, -c("SedentaryMinutes"))
+
+MinutetypeNS <- melt(aggminutebydayNS,  id.vars = 'Weekday', variable.name = 'minutetype')
+```
+
+This gave us some more useful visuals in both a grouped and stacked bar format: 
+
+```{r warning=FALSE}
+ggplot(MinutetypeNS, aes(fill=minutetype, y=value, x=Weekday)) + 
+  geom_bar(position="dodge", stat="identity")
+
+ggplot(MinutetypeNS, aes(fill=minutetype, y=value, x=Weekday)) + 
+  geom_bar(position="stack", stat="identity")
+```
+
+This shows that there is  no MAJOR difference between the days in terms of activity type.  However, it might be worth noting that there are more nonsedentary minutes on Saturday than rest of days.
+
+### What types of users are wearing Fitbit devices?
+
+In order to better market Bellabeat devices, it might help to see what type of user would have a fitness tracking device in the first place.  Do they tend to be more or less active, or is there no correlation?
+
+First, we look at some aggregated data:
+
+```{r warning=FALSE}
+aggdailyactivity<- dailyactivity %>% 
+  group_by(Id) %>% 
+  summarize(Days=n_distinct(ActivityDate), AvgVAMinutes=mean(VeryActiveMinutes),
+            AvgFAMinutes=mean(FairlyActiveMinutes),
+            AvgLAMinutes=mean(LightlyActiveMinutes),
+            AvgSMinutes=mean(SedentaryMinutes), AvgSteps=mean(TotalSteps))
+```
+
+Then, we determined how active users were based on their steps, and found their percentages: 
+
+```{r warning=FALSE}
+aggdailyactivity<- aggdailyactivity %>% 
+  mutate(usertype = case_when(AvgSteps < 5000 ~ "Inactive",
+                              AvgSteps >= 5000 & AvgSteps < 7500 ~ "Lightly Active",
+                              AvgSteps >= 7500 & AvgSteps < 10000 ~ "Fairly Active",
+                              AvgSteps >= 10000 ~ "Very Active"))
+
+percentusertype <- aggdailyactivity %>% 
+  group_by(usertype) %>% 
+  summarise(Number=n()) %>% 
+  mutate(percent=Number/33) 
+
+percentusertype <- percentusertype%>% 
+  mutate(label=label_percent()(percentusertype$percent))
+```
+
+To visualize this, we created a bar chart, since we were looking at percentages:
+
+```{r warning=FALSE}
+ggplot(percentusertype, aes(x="", y=percent, fill=usertype))+
+  geom_bar(stat = "identity", width=1, color="white")+
+  coord_polar("y", start=0)+
+  theme_void()+
+  geom_text(aes(label = label),
+            position = position_stack(vjust = 0.5))+
+  labs(title = "Percentage of Users")
+```
+
+This revealed that there is no set "type" of user in terms of activity for who uses a fitness tracking device.  In that sense, it can be marketed to a variety of lifestyles. 
+
+## Examining daily activity by time of day
+
+### Manipulating and cleaning our data
+
+First, we checked the two dataframes for duplicates: 
+```{r warning=FALSE}
+sum(duplicated(hourlyintensities))
+sum(duplicated(hourlysteps))
+```
+
+Then, we made some adjustments to how date and time were presented:
+
+```{r warning=FALSE}
+#First need to change to date time
+hourlysteps$ActivityHour <- parse_date_time(hourlysteps$ActivityHour, 
+                                                  '%m/%d/%Y %I:%M:%S %p')
+hourlyintensities$ActivityHour <- parse_date_time(hourlyintensities$ActivityHour,                                                   '%m/%d/%Y %I:%M:%S %p')
+
+#Now add separate date and time columns, since we only want hour
+hourlysteps$Date <- as.Date(hourlysteps$ActivityHour)
+hourlysteps$Time <- format(as.POSIXct(hourlysteps$ActivityHour),
+                           format = '%H')
+hourlyintensities$Date <- as.Date(hourlyintensities$ActivityHour)
+hourlyintensities$Time <- format(as.POSIXct(hourlyintensities$ActivityHour),
+                           format = '%H')
+
+```
+
+We then merged the two dataframes into one, so it would be easier to work with: 
+
+```{r warning=FALSE}
+hourlydf <- full_join(hourlyintensities, hourlysteps, 
+                      by = c("Id" = "Id", "ActivityHour" = "ActivityHour", 
+                             "Date" = "Date", "Time" = "Time"))
+```
+
+And simplified it so that it would only have the data we wanted to work with: 
+```{r warning=FALSE}
+hourlydf <- select(hourlydf, Id, Date, Time, TotalIntensity, AverageIntensity, StepTotal)
+summary(hourlydf)
+```
+
+### Examine when people are most active
+
+Rather than looking at scatterplots that show the steps per hour or Average Intensity per hour, it makes more sense to look at some aggregated data. 
+
+```{r warning=FALSE}
+aggtime=aggregate(hourlydf,
+              by = list(hourlydf$Time),
+              FUN = mean)
+aggtime <- select(aggtime, -c("Id", "Date", "Time")) %>% 
+  rename(Time = Group.1)
+summary(aggtime)
+```
+
+This makes it easier to visualize:
+```{r warning=FALSE}
+ggplot(aggtime, aes(x=Time, y=StepTotal, fill=StepTotal))+
+  geom_bar(stat = "identity")+
+  scale_fill_gradient(low="red", high="blue")+
+  theme(axis.text.x = element_text(angle = 90))+
+  theme(legend.position = "none")+
+  labs(title="Average Steps per Hour")
+
+ggplot(aggtime, aes(x=Time, y=TotalIntensity, fill=TotalIntensity))+
+  geom_bar(stat = "identity")+
+  scale_fill_gradient(low="red", high="blue")+
+  theme(axis.text.x = element_text(angle = 90))+
+  theme(legend.position = "none")+
+  labs(title = "Average Intensity per Hour")
+```
+
+This brings up the question of whether activity is consistent across the week.  In other words, are there different active times during the work week than the weekend?
+
+To explore this, we needed to filter our data and create separate data frames for weekends and weekdays. 
+
+```{r warning=FALSE}
+#Add a column for a day of the week
+hourlydf$weekday <- wday(hourlydf$Date, label=TRUE)
+
+#Add a column that shows weekday or weekend
+hourlydf <- hourlydf %>% 
+  mutate(Weekend = case_when(
+    weekday == "Sun" ~ 'Weekend' 
+    , weekday == "Sat" ~ 'Weekend'
+    , TRUE ~ 'Weekday'
+  ))
+
+hourlydfweekday <- hourlydf %>% 
+  filter(Weekend == "Weekday")
+
+aggweekday=aggregate(hourlydfweekday,
+                  by = list(hourlydfweekday$Time),
+                  FUN = mean)
+aggweekday <- select(aggweekday, -c("Id", "Date", "Time", "weekday", "Weekend")) %>% 
+  rename(Time = Group.1)
+
+hourlydfweekend <- hourlydf %>% 
+  filter(Weekend == "Weekend")
+
+aggweekend=aggregate(hourlydfweekend,
+                     by = list(hourlydfweekend$Time),
+                     FUN = mean)
+aggweekend <- select(aggweekend, -c("Id", "Date", "Time", "weekday", "Weekend")) %>% 
+  rename(Time = Group.1)
+```
+
+This allows us to examine possible differences throughout the week. 
+
+```{r warning=FALSE}
+summary(aggweekday) #look at only Weekday data
+summary(aggweekend) #look at only Weekend data
+```
+
+We can then visualize it to more clearly compare the weekday intensity to the weekend intensity: 
+
+```{r warning=FALSE}
+WE <- ggplot(aggweekend, aes(x=Time, y=TotalIntensity, fill=TotalIntensity)) + 
+  geom_bar(stat = "identity")+
+  scale_fill_gradient(low="red", high="blue")+
+  theme(axis.text.x = element_text(angle = 90))+
+  theme(legend.position = "none")+
+  labs(title = "Weekends")
+
+WD <- ggplot(aggweekday, aes(x=Time, y=TotalIntensity, fill=TotalIntensity)) + 
+  geom_bar(stat = "identity")+
+  scale_fill_gradient(low="red", high="blue")+
+  theme(axis.text.x = element_text(angle = 90))+
+  annotate("rect", xmin = 09, xmax = 17, ymin = 0, ymax = Inf,
+           alpha = .1,fill = "blue")+
+  theme(legend.position = "none")+
+  labs(title = "Weekdays")
+
+
+WD / WE 
+```
+
+This shows that there is a change in when people are active during the weekday, while they are working.  
+
+This could have implications for the marketing team of Bellabeat, because it suggests that fitness measuring devices are worn by women throughout the workday. 
+
+## Examining sleep data
+
+### Cleaning and manipulating our data
+
+As with our other datasets, we wanted to make sure our sleep dataset was clean and easy to work with. 
+
+```{r warning=FALSE}
+#Check for Duplicates
+sum(duplicated(sleepday))
+
+#Remove Duplicates
+sleepday <- sleepday %>%
+  distinct()
+sum(duplicated(sleepday))
+
+#Adjusting date/time and adding weekday/weekend
+sleepday$SleepDay <- as.POSIXct(sleepday$SleepDay, format="%m/%d/%Y")
+sleepday$Weekday <- wday(sleepday$SleepDay, label=TRUE)
+sleepday <- sleepday %>% 
+  mutate(Weekend = case_when(
+    Weekday == "Sun" ~ 'Weekend' 
+    , Weekday == "Sat" ~ 'Weekend'
+    , TRUE ~ 'Weekday'
+  ))
+```
+
+### Examining sleep data
+
+This was a smaller dataset (or at least, had fewer entries), so we wanted to explore some aggregated data. 
+
+```{r warning=FALSE}
+aggsleepday <- sleepday %>% 
+  group_by(Id) %>% 
+  summarise(Records=n_distinct(SleepDay),
+            AvgSleepRecords = mean(TotalSleepRecords),
+            AvgMinutesAsleep = mean(TotalMinutesAsleep))
+```
+
+Mostly, we were curious if there was any correlation between the number of records and recorded sleep time. 
+
+To see this, we visualized our aggregated data as a scatterplot. 
+
+```{r warning=FALSE}
+ggplot(aggsleepday, aes(x=Records, y=AvgMinutesAsleep))+
+  geom_point()+
+  geom_smooth()
+```
+
+While there are outliers here, there does seem to be some positive correlation between the number of records of sleep and the average minutes sleeping.
+
+There might be two reasons for this:
+
+* There are fewer records in general, because devices are charging at night
+* There are fewer records by people who struggled sleeping with the device
+
+## Conclusions: 
+
+It's important to note that this was a single dataset based on a single study involving only 33 women.  In addition, there was no demographic information to further break down the users to gather further insight.  As a result, examination of supplementary data would be recommended.  
+
+However, based on the analysis completed, we advise that the Bellabeat team consider the following: 
+
+* Don't limit your marketing to just athletes.  There is a wide range of fitness tracker users, and it isn't limited to extremely active individuals.  
+* Encourage greater use throughout the day.  It might help to focus on how a fitness tracker can keep track of your activity during the workday.  Perhaps adding incentives or rewards for hitting certain levels of activity could be helpful. This can be a focus of the app. 
+* Focus on comfort and wearability. The fitbit data revealed some inconsistencies in wear, especially in regards to sleep.  Making Bellabeat products comfortable and practical might result in greater usage. 
